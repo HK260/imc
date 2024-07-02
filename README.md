@@ -23,7 +23,7 @@ For more detailed information, you can refer to the [GitHub repository for the c
 ## Team Members
 
 - **Tanmay Goel (https://github.com/codergoel)**
-- **Harsh Khetan (**
+- **Harsh Khetan (https://github.com/HK260)**
 
 ## Installation
 
