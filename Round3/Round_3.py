@@ -4,12 +4,10 @@ from typing import Any, List, Dict
 import math
 import numpy as np
 
-POSITION_LIMIT = 20
-
 POSITION_LIMITS = {
     "AMETHYSTS": 20,
     "STARFRUIT": 20,
-    "ORCHIDS": 100,  # Updated position limit for Orchids
+    'ORCHIDS':   {"PLIMIT": 100, "CONVERSION": 0},  # Updated position limit for Orchids
 }
 
 PRICE_AGGRESSION = 0
@@ -23,11 +21,11 @@ class Trader:
     previous_prices = {
         "STARFRUIT": [],
         "AMETHYSTS": [],
-        "ORCHIDS" : [],
-        "SMA_1" : [],
-        "SMA_2":[],
-        "LMA": [],
-        "SWITCH":0
+    }
+    PRODUCTS = {
+        'AMETHYSTS': {"PLIMIT": 20},
+        'STARFRUIT': {"PLIMIT": 20, "CACHE": []},
+        'ORCHIDS':   {"PLIMIT": 100, "CONVERSION": 0}
     }
 
     def update_price_history(self, previousTradingState, tradingState: TradingState):
@@ -35,30 +33,7 @@ class Trader:
         if "previous_prices" in previousTradingState:
             self.previous_prices = previousTradingState["previous_prices"]
 
-        for product in ["STARFRUIT", "AMETHYSTS","ORCHIDS"]:
-        
-            if product == "ORCHIDS":
-                order_depth = tradingState.order_depths[product]
-                lowest_sell_price = sorted(order_depth.sell_orders.keys())[0]
-                highest_buy_price = sorted(order_depth.buy_orders.keys(), reverse=True)[0]
-                current_mid_price = (lowest_sell_price + highest_buy_price) / 2
-                if len(self.previous_prices[product]) < 100:
-                    self.previous_prices[product].append(current_mid_price)
-                if len(self.previous_prices[product]) == 100:
-                    self.previous_prices[product].append(current_mid_price)
-                    self.previous_prices[product].pop(0)
-                    prices_array = np.array(self.previous_prices[product])
-                    ma_13 = np.mean(prices_array[-13:])
-                    ma_26 = np.mean(prices_array[-26:])
-                    ma_100 = np.mean(prices_array[-100:])
-                    self.previous_prices["SMA_1"].append(ma_13)
-                    self.previous_prices["SMA_2"].append(ma_26)
-                    self.previous_prices["LMA"].append(ma_100)
-                    if len(self.previous_prices["LMA"])>1:
-                        self.previous_prices["SMA_1"].pop(0)
-                        self.previous_prices["SMA_2"].pop(0)
-                        self.previous_prices["LMA"].pop(0)       
-            else:
+        for product in ["STARFRUIT", "AMETHYSTS"]:
                 order_depth = tradingState.order_depths[product]
                 lowest_sell_price = sorted(order_depth.sell_orders.keys())[0]
                 highest_buy_price = sorted(order_depth.buy_orders.keys(), reverse=True)[0]
@@ -116,10 +91,10 @@ class Trader:
                 assert(buy_amount > 0)
                 orders.append(Order(product, ask, buy_amount))
                 print(f"{product} buy order 2: {vol} at {ask}")
-					# skip if there is no quota left
-				# once we exhaust all profitable sell orders, we place additional buy orders
-				# at a price acceptable to us
-				# what that price looks like will depend on our position		
+					    # skip if there is no quota left
+				      # once we exhaust all profitable sell orders, we place additional buy orders
+				      # at a price acceptable to us
+				      # what that price looks like will depend on our position		
             if product_position_limit - buying_pos > 0: # if we have capacity
                 if buying_pos < THRESHOLDS["over"]: # if we are overleveraged to sell, buy at parity for price up to neutral position
                     target_buy_price = min(acceptable_buy_price, lowest_buy_price + 1)
@@ -139,10 +114,7 @@ class Trader:
                     orders.append(Order(product, target_buy_price, vol))
                     print(f"{product} buy order 5: {vol} at {target_buy_price}")
                     buying_pos += vol
-            
-            
-
-                
+  
         selling_pos = state.position.get(product, 0)
         for bid, vol in orders_buy:
             if -product_position_limit - selling_pos >= 0:
@@ -182,41 +154,25 @@ class Trader:
                     print(f"{product} sell order 5: selling {vol} at {target_sell_price}")        
         return orders
     
-    def get_orders_orchid(self, state: TradingState, product: str) -> List[Order]:
-        conversion = 0
-        orders = []
-        
-        if len(self.previous_prices[product])<100:
-            return None
-        
-        product_order_depth = state.order_depths[product]
-        product_position_limit = POSITION_LIMITS[product]
-        
-        orders_buy = list(product_order_depth.buy_orders.items())
-        
-        prices_array = np.array(self.previous_prices[product])
-        
-        ma_13 = np.mean(prices_array[-13:])  # Last 25 prices for 25-period MA
-        ma_26=np.mean(prices_array[-26:])
-        ma_100 = np.mean(prices_array[-100:])  
-        
-        selling_pos = state.position.get(product, 0)
-        if self.previous_prices["SWITCH"]==0:
-            if ma_100>ma_13 and ma_26>ma_13:
-                sell_amount = max(-orders_buy[0][1], -product_position_limit - selling_pos)
-                selling_pos += sell_amount
-                orders.append(Order(product,orders_buy[0][0],sell_amount))
-                self.previous_prices["SWITCH"]=1
-        else:    
-            buying_pos = state.position.get(product, 0)
-            if buying_pos<0:
-                if ma_13>ma_100 and ma_13>ma_26:
-                    conversion = -buying_pos     
-                    self.previous_prices["SWITCH"] = 0                    
-        
-        return [orders,conversion]
-        
-    
+    def submit_order(self, product, price, quantity, state):
+        order=[]
+        if product in state.position.keys():
+            can_buy = self.PRODUCTS[product]["PLIMIT"] - state.position.get(product)
+            can_sell = state.position.get(product) + self.PRODUCTS[product]["PLIMIT"]
+        else:
+            can_buy, can_sell = self.PRODUCTS[product]["PLIMIT"],self.PRODUCTS[product]["PLIMIT"]
+
+        ### Fulfill Buy Orders
+        if quantity < 0:
+            order_quantity = min(abs(quantity), can_buy)
+            return order.append(Order(product, price, order_quantity))
+
+        ### Fulfill Sell Orders
+        if quantity > 0:
+            order_quantity = min(abs(quantity), can_sell)
+            return order.append(Order(product, price, -order_quantity))
+
+
     def run(self, state: TradingState):
         try:
             previousStateData = jsonpickle.decode(state.traderData) 
@@ -233,24 +189,35 @@ class Trader:
                     orders = self.get_orders(state, product_acceptable_price, product)
                     result[product] = orders
             else:  
-                x = self.get_orders_orchid(state, product)
-                if x is not None:
-                    result[product] = x[0]
-                    conversions=x[1]
+              askThere = state.observations.conversionObservations["ORCHIDS"].askPrice + state.observations.conversionObservations["ORCHIDS"].importTariff + state.observations.conversionObservations["ORCHIDS"].transportFees
+              bidThere = state.observations.conversionObservations["ORCHIDS"].bidPrice - state.observations.conversionObservations["ORCHIDS"].exportTariff - state.observations.conversionObservations["ORCHIDS"].transportFees
+                
+              ask, ask_amount = list(state.order_depths[product].sell_orders.items())[0]
+              bid, bid_amount = list(state.order_depths[product].buy_orders.items())[0]
+
+                
+              # SELL HERE BUY THERE
+              if bid - askThere >=0:
+                  orders_1=self.submit_order(product, bid, bid_amount, state)
+                  result[product] = orders_1 
+                  if isinstance(state.position.get("ORCHIDS"), int):
+                      self.PRODUCTS["ORCHIDS"]["CONVERSION"] = -state.position.get("ORCHIDS") - bid_amount
+
+              if bidThere - ask >=0:
+                  orders_1=self.submit_order(product, ask, ask_amount, state)
+                  result[product] = orders_1 
+                  if isinstance(state.position.get("ORCHIDS"), int):
+                      self.PRODUCTS["ORCHIDS"]["CONVERSION"] = state.position.get("ORCHIDS") + ask_amount 
+                    
         
         traderData = {
             "previous_prices": self.previous_prices    
         }
         
         serialisedTraderData = jsonpickle.encode(traderData)
+        print(state.observations)
         
-        try:
-            traderDataDecoded = jsonpickle.decode(state.traderData)  # Decoding traderData
-            print(state.observations)
-            print(traderDataDecoded)
-            
-        except Exception as e:
-            print("Error decoding or accessing traderData:", str(e))
+        conversions = self.PRODUCTS["ORCHIDS"]["CONVERSION"]
         
         
         
